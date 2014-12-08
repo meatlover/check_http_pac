@@ -40,11 +40,14 @@
 #
 
 import sys
+import os
+import re
 import getopt
 import time
 import socket
 import traceback
 import requests
+from requests.exceptions import ConnectTimeout
 from requests.auth import HTTPBasicAuth
 from requests.auth import HTTPDigestAuth
 from requests_ntlm import HttpNtlmAuth
@@ -101,6 +104,7 @@ def process_cfg(cfg, opts):
     cfg["timeout"] = 10
 
 def test_proxy(cfg):
+  ok = False
   try:
     start_time = time.time()
     proxies = {}
@@ -132,8 +136,10 @@ def test_proxy(cfg):
         verify=False, auth=auth, timeout=cfg["timeout"])
     else:
       cfg["proxy"] = ''
+      
       request = requests.get(cfg["url"], verify=False, \
         auth=auth, timeout=cfg["timeout"])
+
     responseValue = request.text
     # print full HTTP response when in debug mode
     if "debug" in cfg:
@@ -141,21 +147,23 @@ def test_proxy(cfg):
     end_time = time.time()
     duration = end_time - start_time
   
-   	# Check contet
-    if "expect" in cfg:       
-      if responseValue.find(cfg["expect"]) == -1:
+    # Check contet
+    if "expect" in cfg:
+      matches = re.search(cfg["expect"], responseValue)	
+      if not matches:
         return report_critical(cfg)
- 			
    	# Check warning time
     if "warntime" in cfg:
       if duration >= cfg["warntime"]:
         return report_warning(cfg, duration)
-
+    ok = True
     return report_ok(cfg, duration) 
-  except Exception as e:
-    traceback.print_exc()
-    return report_unknown(cfg, e)
-  
+  except ConnectTimeout as e:
+    return report_warning(cfg, duration)
+  except:
+    if not ok:
+      ex_type, ex, tb = sys.exc_info()
+      return report_unknown(cfg, str(traceback.extract_tb(tb)))
 
 # Print Nagios output
 def report_ok(cfg, duration):
@@ -167,9 +175,15 @@ def report_ok(cfg, duration):
   return 0
 
 def report_warning(cfg, duration):
-  print "{0 }WARNING - {1} via {2}".format(conn_type(cfg["url"]), \
+  if "proxy" in cfg:
+    proxy = cfg["proxy"]
+  else:
+    proxy = ''
+
+  
+  print "{0} WARNING - {1} via {2}".format(conn_type(cfg["url"]), \
     "Over warning time ({0:.2f}s >= {warntime:.2f}s)".format(duration, **cfg), \
-    proxy_msg(cfg["proxy"]))
+    proxy)
   if __name__ == '__main__':
     sys.exit(1)
   return 1
@@ -205,7 +219,8 @@ def proxy_msg(proxy):
 
 def print_help():
   print(  
-"""# usage:
+"""# 
+Usage:
  check_http_proxy
      --url=site_url
      --expect=str_content
@@ -216,12 +231,16 @@ def print_help():
     [--timeout=10]
     [--warntime=5]
     [--debug]
-    [--help]""")
+    [--help]
 
-
+Example: 
+check_http_proxy --url="http://www.baidu.com" --expect="030173" --proxy=sbjwbsnapp1-wcg.websense.com:8080 --timeout=20 --warntime=5 --debug
+  Check access to http://www.baidu.com via sbjwbsnapp1-wcg:8080 to check 
+  if the string 030173 is in the response. Warn if doesn't get response 
+  after 5 seconds since sending the HTTP request, time out after 20 seconds. 
+  Printing response in debug mode.""")
 
 if __name__ == '__main__':
   cfg = get_cmdline_cfg()
   test_proxy(cfg)
-
  
